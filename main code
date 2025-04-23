@@ -1,0 +1,84 @@
+import os
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torchvision.transforms as transforms
+from torch.utils.data import Dataset, DataLoader
+from PIL import Image
+import urllib.request
+def download_esrgan_weights(model_path='RRDB_ESRGAN_x4.pth'):
+    if not os.path.exists(model_path):
+        print("[YODHA] Downloading ESRGAN model...")
+        url = "https://github.com/xinntao/ESRGAN/blob/master/models/RRDB_ESRGAN_x4.pth?raw=true"
+        urllib.request.urlretrieve(url, model_path)
+        print("[YODHA] Download complete.")
+    else:
+        print("[YODHA] ESRGAN model already exists.")
+def load_model(path='RRDB_ESRGAN_x4.pth'):
+    model = torch.load(path)
+    model.eval()
+    return model.to(device)
+def super_resolve_image(model, image_path):
+    image = Image.open(image_path).convert('RGB')
+    transform = transforms.ToTensor()
+    lr_tensor = transform(image).unsqueeze(0).to(device)
+    with torch.no_grad():
+        sr_tensor = model(lr_tensor).squeeze(0).cpu()
+    sr_image = transforms.ToPILImage()(sr_tensor)
+    sr_image.save("enhanced_output.png")
+    print("[YODHA] Image enhanced and saved as 'enhanced_output.png'.")
+class ImagePairDataset(Dataset):
+    def __init__(self, lr_dir, hr_dir, transform):
+        self.lr_paths = sorted(os.listdir(lr_dir))
+        self.hr_paths = sorted(os.listdir(hr_dir))
+        self.lr_dir = lr_dir
+        self.hr_dir = hr_dir
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.lr_paths)
+
+    def __getitem__(self, idx):
+        lr_img = Image.open(os.path.join(self.lr_dir, self.lr_paths[idx])).convert('RGB')
+        hr_img = Image.open(os.path.join(self.hr_dir, self.hr_paths[idx])).convert('RGB')
+        return self.transform(lr_img), self.transform(hr_img)
+def fine_tune(model, lr_dir, hr_dir, epochs=5):
+    transform = transforms.Compose([
+        transforms.Resize((128, 128)),
+        transforms.ToTensor()
+    ])
+    dataset = ImagePairDataset(lr_dir, hr_dir, transform)
+    loader = DataLoader(dataset, batch_size=4, shuffle=True)
+
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=1e-4)
+
+    print("[YODHA] Starting fine-tuning...")
+    for epoch in range(epochs):
+        for lr_imgs, hr_imgs in loader:
+            lr_imgs, hr_imgs = lr_imgs.to(device), hr_imgs.to(device)
+            sr_imgs = model(lr_imgs)
+            loss = criterion(sr_imgs, hr_imgs)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+        print(f"[Epoch {epoch+1}/{epochs}] Loss: {loss.item():.4f}")
+    print("[YODHA] Fine-tuning complete.")
+if __name__ == "__main__":
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # Step 1: Download model
+    download_esrgan_weights()
+
+    # Step 2: Load model
+    model = load_model()
+
+    # Step 3: Enhance image
+    image_path = "low_res_image.png"  # Replace with your image
+    super_resolve_image(model, image_path)
+
+    # Step 4 (Optional): Fine-tune
+    # Uncomment to fine-tune on QR/Satellite datasets
+    # fine_tune(model, "datasets/qr_dataset/LR", "datasets/qr_dataset/HR", epochs=10)
